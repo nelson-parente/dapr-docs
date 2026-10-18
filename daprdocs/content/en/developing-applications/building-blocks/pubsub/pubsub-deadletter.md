@@ -93,6 +93,15 @@ spec:
           retry: pubsubRetry
 ```
 
+### Retries stop when the component cancels the handler
+
+Starting with Dapr v1.19 (and v1.18.5), the retries of an inbound message use the context of the handler that the pub/sub component calls. Before, the retries used a context that never ended, so nothing could stop them. Now, when the component cancels the handler, Dapr stops the retries and the call that is in flight to your app, and does not retry the message again:
+
+- For example, when a Kafka consumer group rebalance starts, the Kafka component cancels the handler. The retries stop, the message is not acknowledged, and the consumer that takes over the partition receives it again.
+- Some components put a timeout on the handler. This timeout now also limits the retries of a message, and a message that exceeds it is sent to the dead letter topic. This applies to the Azure Service Bus `handlerTimeoutInSec` metadata field (default `60` seconds) and the Redis Streams `processingTimeout` metadata field (default `60s`). Set the retry policy so that `maxRetries` times `duration` fits inside this timeout, or raise the timeout.
+
+See the [Azure Service Bus Topics]({{% ref setup-azure-servicebus-topics %}}) and [Redis Streams]({{% ref setup-redis-pubsub %}}) component specs.
+
 ## Configuring a subscription for handling the dead letter topics
 
 Remember to now configure a subscription to handling the dead letter topics. For example you can create another declarative subscription to receive these on the same or a different application. The example below shows the checkout application subscribing to the `poisonMessages` topic with another subscription and sending these to be handled by the `/failedmessages` endpoint.
