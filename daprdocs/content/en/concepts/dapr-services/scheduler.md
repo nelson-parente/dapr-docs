@@ -12,9 +12,10 @@ The Dapr Scheduler service is used to schedule different types of jobs, running 
 
 The Scheduler service can also serve actor placement in place of the standalone [Placement service]({{% ref placement %}}). See [Serving actor placement](#serving-actor-placement).
 
-There is no concept of a leader Scheduler instance.
+There is no concept of a leader Scheduler instance for job scheduling.
 All Scheduler service replicas are considered peers.
 All receive jobs to be scheduled for execution and the jobs are allocated between the available Scheduler service replicas for load balancing of the trigger events.
+The only exception is actor placement: when the Scheduler [serves actor placement](#serving-actor-placement), exactly one replica is also the placement leader.
 
 The diagram below shows how the Scheduler service is used via the jobs API when called from your application. All the jobs that are tracked by the Scheduler service are stored in the Etcd database.
 
@@ -219,7 +220,11 @@ dapr init --scheduler-placement
 
 Sidecars take actor placement from whichever service the control plane advertises, so applications need no configuration of their own and the cluster always has exactly one placement authority. Toggling the setting in either direction requires no sidecar restarts. [Learn more about serving placement from the Scheduler service.]({{% ref "placement#serving-placement-from-the-scheduler-service" %}})
 
-The dissemination behavior of scheduler-served placement can be tuned with the following Scheduler flags:
+Every Scheduler replica detects whether a Placement service is deployed, whether or not it serves placement. In Kubernetes it watches the Placement pods, so the Scheduler `ClusterRole` (or `Role`) needs `get`, `list` and `watch` on `pods` on every Dapr 1.19 installation. [Learn more about the required permissions.]({{% ref "placement#kubernetes-permissions" %}})
+
+While the Scheduler serves placement, exactly one replica is the placement leader and accepts placement streams from sidecars. [Learn how to verify the active placement authority, the placement leader and the placement metrics.]({{% ref "placement#verify-which-placement-authority-is-active" %}})
+
+The dissemination behavior of scheduler-served placement can be tuned with the following Scheduler flags. They are Scheduler binary flags only: the Dapr Helm chart has no value for `--placement-disseminate-timeout` or `--placement-disseminate-coalesce-window`, and sets `--placement-enabled=true` from `global.scheduler.placement.enabled`.
 
 ```
 --placement-enabled                       bool      When enabled, this scheduler serves actor placement to daprd sidecars, replacing the standalone placement service. All scheduler replicas in the cluster must set the same value. (default false)
@@ -292,7 +297,7 @@ Changing these settings should always been done first in a testing environment, 
 --etcd-backend-batch-interval string                            Maximum time before committing the backend transaction. (default "100ms")
 --etcd-backend-batch-limit int                                  Maximum operations before committing the backend transaction. (default 10000)
 --etcd-compaction-mode string                                   Compaction mode for etcd. Can be 'periodic' or 'revision' (default "revision")
---etcd-compaction-retention string                              Compaction retention for etcd. Can express time or number of revisions, depending on the value of 'etcd-compaction-mode' (default "1000000")
+--etcd-compaction-retention string                              Compaction retention for etcd. Can express time or number of revisions, depending on the value of 'etcd-compaction-mode' (default "10000")
 --etcd-experimental-bootstrap-defrag-threshold-megabytes uint   Minimum number of megabytes needed to be freed for etcd to consider running defrag during bootstrap. Needs to be set to non-zero value to take effect. (default 100)
 --etcd-max-snapshots uint                                       Maximum number of snapshot files to retain (0 is unlimited). (default 10)
 --etcd-max-txn-ops uint                                         Maximum number of operations permitted in a single etcd transaction. (default 10000)
@@ -300,13 +305,15 @@ Changing these settings should always been done first in a testing environment, 
 --etcd-snapshot-count uint                                      Number of committed transactions to trigger a snapshot to disk. (default 100000)
 ```
 
+In Dapr 1.19 the default of `--etcd-compaction-retention` is `10000` revisions; it was `1000000` in Dapr 1.18. Every revision keeps the payload of the job it wrote, so the retention bounds the size of the Etcd database. If you set `dapr_scheduler.etcdCompactionRetention` explicitly, your value still applies.
+
 Helm:
 
 ```yaml
 dapr_scheduler.etcdBackendBatchInterval="100ms"
 dapr_scheduler.etcdBackendBatchLimit=10000
 dapr_scheduler.etcdCompactionMode="revision"
-dapr_scheduler.etcdCompactionRetention="1000000"
+dapr_scheduler.etcdCompactionRetention="10000"
 dapr_scheduler.etcdDefragThresholdMB=100
 dapr_scheduler.etcdMaxSnapshots=10
 dapr_scheduler.etcdMaxTxnOps=10000
@@ -319,6 +326,12 @@ dapr_scheduler.etcdMaxTxnOps=10000
 ```
 
 Set this flag to bind the Scheduler's healthz endpoint to a specific interface, for example to keep it off a public network. It has no dedicated Helm value as of Dapr 1.19. In self-hosted mode, pass it directly to the Scheduler binary, for example in a Docker Compose or systemd configuration.
+
+## Startup and error handling
+
+The Scheduler's embedded Etcd store can return errors while it runs. Since Dapr 1.19, the Scheduler does not exit when its server stops with a runtime error. It recreates the server in the same process after a jittered backoff (starting at 500ms, up to 10s), and its health endpoint (`/healthz`) reports not ready until the server is running again. Errors in the Scheduler's configuration are still fatal.
+
+The Scheduler exits, so that Kubernetes or your process manager can restart it, when it cannot bind its listen port (`--port`, default `50006`). Retrying in the same process would not release a port that is held by another socket.
 
 ## Related links
 

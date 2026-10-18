@@ -131,9 +131,74 @@ Actor placement can be served by the Scheduler service instead of the standalone
 Complete your Dapr version rollout before enabling this setting. Sidecars running an older Dapr version can only use the Placement service: with it undeployed, their Actor and Workflow APIs stall until the pod is upgraded to a version that supports scheduler placement. No actor state is lost. While a Placement service is running, it remains the placement authority: the Scheduler does not serve placement while one is present, so the cluster keeps a single placement authority throughout the rollout. Once no Placement service remains, the Scheduler serves placement, and a connected older sidecar is logged as a warning, since nothing is left to serve it.
 {{% /alert %}}
 
+If you manage the Scheduler RBAC resources yourself, make sure the Scheduler can `get`, `list` and `watch` `pods`. Every Dapr 1.19 Scheduler needs this permission to detect the Placement pods, whether or not you enable this setting. [Learn more.]({{% ref "placement#kubernetes-permissions" %}})
+
+After the upgrade, [verify that the Scheduler is the active placement authority]({{% ref "placement#verify-which-placement-authority-is-active" %}}): your sidecars log `Connected to scheduler placement leader <address>`, and exactly one Scheduler reports `dapr_scheduler_placement_leader` as `1`.
+
 To roll back, upgrade with the setting `false`: the placement StatefulSet is redeployed and the schedulers hand placement back to it, again without sidecar restarts. In both directions, the change [reassigns actors once]({{% ref "placement#serving-placement-from-the-scheduler-service" %}}) because the two services place actors with different algorithms. Actor state is unaffected.
 
 Because `helm upgrade` resets values not passed on the command line, pass the setting on every subsequent upgrade (or keep it in your values file), otherwise the placement StatefulSet is redeployed and placement hands back to it.
+
+## Downgrade
+
+You can roll back the Dapr control plane on Kubernetes to an earlier version. Check the following before you downgrade from Dapr 1.19.
+
+{{% alert title="Rollback floor" color="warning" %}}
+Do not downgrade from Dapr 1.19 directly to Dapr 1.17.6 or earlier. The safe rollback target is Dapr 1.18.x. To go below 1.18, go through Dapr 1.17.7 first.
+{{% /alert %}}
+
+### Workload identity key floor (Ed25519)
+
+Dapr 1.19 still issues the Ed25519 workload identity keys that Dapr 1.18 introduced. Sentry stores the Ed25519-keyed certificate authority (CA) in the `dapr-trust-bundle` Kubernetes secret. Sentry versions before 1.17.7 cannot parse this trust bundle and crash on startup with an error such as:
+
+```
+fatal: error creating CA: failed to get CA bundle:
+failed to verify CA bundle: unsupported key type ed25519.PrivateKey
+```
+
+While Sentry is down, it cannot issue new workload certificates. Sidecars with unexpired certificates keep working, but a sidecar that restarts or whose certificate expires cannot obtain a new identity. [Learn more about the workload identity key algorithm.]({{% ref "security-concept.md#workload-identity-key-algorithm" %}})
+
+| From | To | Result |
+| ---- | -- | ------ |
+| 1.19 | 1.18.x | Supported rollback target. Dapr 1.18 introduced the Ed25519 keys, so its Sentry can read the trust bundle. |
+| 1.19 | 1.17.7 or a later 1.17.x | Supported. Dapr 1.17.7 includes the fix that lets Sentry read an Ed25519-keyed trust bundle ([dapr#9904](https://github.com/dapr/dapr/pull/9904)). |
+| 1.19 | 1.17.6 or earlier | Not supported. Sentry crash-loops on startup. |
+
+To downgrade below 1.17.7, go through 1.17.7 first:
+
+1. Roll the control plane back to 1.17.7.
+1. Wait for Sentry to be running, and confirm that `dapr status -k` reports the control plane as healthy.
+1. Downgrade from 1.17.7 to your target version. Consider [rotating the CA]({{% ref "mtls.md#root-and-issuer-certificate-upgrade-using-cli-recommended" %}}) to a key algorithm that your target version generates natively before you continue.
+
+### Roll back the control plane
+
+Use `helm rollback` to a revision of the Dapr release, or upgrade the release to the target version:
+
+```bash
+# List the revisions of the release, then roll back to the one you want
+helm history dapr -n dapr-system
+helm rollback dapr <REVISION> -n dapr-system --wait
+
+# Or upgrade the release to a specific version
+helm upgrade dapr dapr/dapr --version <TARGET-VERSION> --namespace dapr-system --wait
+```
+
+When the control plane is back, restart your application deployments with a rolling restart so that the sidecars use the older sidecar injector image and request new identities from the rolled-back Sentry:
+
+```bash
+kubectl rollout restart deploy/<DEPLOYMENT-NAME>
+```
+
+### If you turned on placement served by the Scheduler
+
+If you turned on `global.scheduler.placement.enabled`, turn it off before you downgrade, and downgrade in this order:
+
+1. Upgrade with `global.scheduler.placement.enabled=false` and wait for the Placement pods to be ready. The Placement StatefulSet is redeployed, and sidecars running Dapr 1.19 move back to the Placement service without a restart. Actors are reassigned once.
+1. Verify that your sidecars reconnect to the Placement service. They log `Connected to placement service: <address>`. [Learn how to verify the active placement authority.]({{% ref "placement#verify-which-placement-authority-is-active" %}})
+1. Downgrade the control plane.
+1. Downgrade the sidecars with a rolling restart of your application deployments.
+
+Do not downgrade the sidecars before you turn the setting off. A sidecar older than 1.19 cannot use the Scheduler for placement, so with no Placement service deployed its Actor and Workflow APIs stall.
 
 ## Related links
 

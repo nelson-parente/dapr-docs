@@ -25,6 +25,8 @@ The default Docker setup provides out of the box functionality with the followin
 
 The `dapr-placement` service is responsible for managing the actor distribution scheme and key range settings. This service is not launched as a container and is only required if you are using Dapr actors. For more information on the actor `Placement` service read [actor overview]({{% ref "actors-overview.md" %}}).
 
+To have the [Scheduler service]({{% ref scheduler %}}) serve actor placement instead of the `dapr-placement` service, initialize Dapr with [`dapr init --scheduler-placement`]({{% ref dapr-init.md %}}). It requires Dapr 1.19 or later, and the CLI starts the Scheduler with `--placement-enabled=true` for you. The flag cannot be combined with `--slim`. [Learn more about serving placement from the Scheduler service.]({{% ref "placement#serving-placement-from-the-scheduler-service" %}})
+
 <img src="/images/overview-standalone-docker.png" width=1000 alt="Diagram of Dapr in self-hosted Docker mode" />
 
 ## Launching applications with Dapr

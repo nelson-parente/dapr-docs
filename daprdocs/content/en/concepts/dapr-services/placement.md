@@ -47,6 +47,89 @@ Complete your Dapr version rollout before enabling this setting. Sidecars runnin
 
 The [`/placement/state` API](#placement-tables) is only available from the standalone Placement service and is not served by the Scheduler.
 
+### Prerequisites and behavior
+
+- **Sidecar version.** Every sidecar must run Dapr 1.19 or later before the Placement service is removed. A sidecar signals that it supports Scheduler placement when it connects to the Scheduler, so you do not set anything on the sidecar.
+- **Older sidecars.** An older sidecar can only use the Placement service. Once no Placement service remains, its actor and workflow APIs stall until the pod is upgraded. The older sidecar does not stop the Scheduler from serving the sidecars that are already upgraded: the Scheduler logs a warning and reports the sidecar in the `dapr_scheduler_placement_incapable_sidecars` metric.
+- **No sidecar restarts.** Sidecars running Dapr 1.19 or later switch placement authority while running, in either direction. They keep their configured Placement address, so they can return to the Placement service if you turn the setting off.
+- **Timing.** When the last Placement pod is gone, the Schedulers take over after a few seconds. On rollback, sidecars move to the Placement service as soon as its pods exist, and retry until they are ready, so expect a short pause in actor and workflow activity.
+- **Actor reassignment.** Actors are deactivated and reactivated on their new hosts once per switch, in either direction. Actor state is kept.
+
+### Verify which placement authority is active
+
+**Sidecar logs.** Each sidecar logs, at `info` level, which service it connected to for actor placement:
+
+| Log line | Meaning |
+| -------- | ------- |
+| `Connected to scheduler placement leader <address>` | The sidecar takes actor placement from the Scheduler placement leader at that address. |
+| `Connected to placement service: <address>` | The sidecar takes actor placement from the Placement service. |
+
+For example, on Kubernetes:
+
+```bash
+kubectl logs <pod-name> -c daprd | grep -E "Connected to (scheduler placement leader|placement service)"
+```
+
+A sidecar that cannot find a placement authority logs `Actor placement unavailable: the scheduler does not serve actor placement and no placement service is available to this sidecar`, and its actor and workflow APIs are unavailable until one is.
+
+**Scheduler logs.** Only Schedulers that run with `--placement-enabled=true` log placement messages:
+
+| Log line | Meaning |
+| -------- | ------- |
+| `Placement enabled on scheduler "<id>"` | Logged at startup. This Scheduler can serve placement. |
+| `Placement leadership changed: leader=true` | This Scheduler became the placement leader and accepts placement streams from sidecars. |
+| `Placement leadership changed: leader=false` | This Scheduler stopped being the placement leader. |
+
+A Scheduler that detects a Placement service logs `A placement service is deployed, so actor placement stays with the placement service and this scheduler withholds its placement leader`. A Scheduler logs `A sidecar running an older Dapr version is connected while actor placement is served by the scheduler` when it serves placement while an older sidecar is connected. Upgrade that sidecar.
+
+**Scheduler metrics.** The Scheduler exposes the following Prometheus metrics on its metrics endpoint (port `9090` by default), in addition to its other `dapr_scheduler_*` metrics:
+
+| Metric | Type | Labels | Description |
+| ------ | ---- | ------ | ----------- |
+| `dapr_scheduler_placement_leader` | Gauge | | `1` on the Scheduler that is the placement leader, `0` on the others. Only emitted by Schedulers running with `--placement-enabled=true`. While the Placement service is the authority, it is `0` on every Scheduler. |
+| `dapr_scheduler_placement_streams_connected` | Gauge | `namespace` | Number of sidecar placement streams connected to this Scheduler. Non-zero only on the leader. |
+| `dapr_scheduler_placement_disseminations_total` | Counter | `namespace` | Number of placement dissemination rounds started. |
+| `dapr_scheduler_placement_dissemination_latency` | Histogram (milliseconds) | `namespace` | Time from the start of a dissemination round to its completion. |
+| `dapr_scheduler_placement_table_updates_total` | Counter | `namespace`, `actor_type` | Number of per actor type placement table rebuilds disseminated. |
+| `dapr_scheduler_placement_incapable_sidecars` | Gauge | | Number of connected sidecars running a Dapr version that cannot use Scheduler placement. If it is non-zero after the switch, upgrade those sidecars. |
+
+Exactly one Scheduler reports `dapr_scheduler_placement_leader` as `1` while the Scheduler is the placement authority.
+
+To find sidecars that are older than 1.19 before you remove the Placement service, list the sidecar image of each pod:
+
+```bash
+kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.spec.containers[?(@.name=="daprd")].image}{"\n"}{end}'
+```
+
+### High availability and the placement leader
+
+The Scheduler replicas are peers when scheduling jobs: there is no leader for job scheduling. Actor placement is different. While the Scheduler serves placement, exactly one Scheduler replica is the placement leader:
+
+- The leader is the replica with the lowest address among the Schedulers running with `--placement-enabled=true`. Every replica works this out from the same list of hosts, so they agree without extra coordination.
+- Only the leader accepts placement streams from sidecars. The other replicas stay healthy and ready, but reject placement streams. Sidecars connect to the leader address that the Schedulers advertise.
+- No replica is the leader while a Placement service is deployed, or while the Schedulers have not yet finished detecting whether one is deployed. A freshly started Scheduler cluster also waits for the first sidecar that supports Scheduler placement to connect.
+- Placement tables are not persisted. The leader builds them from the live sidecar streams, and a new leader rebuilds them from scratch, so a change of leader causes a new dissemination round.
+- All Scheduler replicas must run with the same `--placement-enabled` value. The Helm chart sets the same value on every replica.
+
+### Kubernetes permissions
+
+Every Scheduler in Dapr 1.19 detects whether a Placement service is deployed, whether or not `global.scheduler.placement.enabled` is set. In Kubernetes it watches the Placement pods (label `app=dapr-placement-server`) in the control plane namespace. The Scheduler `ClusterRole` (or `Role`, when `global.rbac.namespaced=true`) therefore needs `get`, `list` and `watch` on `pods`:
+
+```yaml
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+```
+
+The Dapr Helm chart grants this permission. If you manage the Scheduler RBAC resources yourself, add it on every Dapr 1.19 install, not only when you turn on Scheduler placement.
+
+### Sidecar startup timeout
+
+When a sidecar starts, it asks the Scheduler whether it serves actor placement and waits for the answer. The daprd flag `--actors-placement-startup-timeout` (annotation `dapr.io/actors-placement-startup-timeout`, default `30s`) sets how long the sidecar waits for the Scheduler to advertise a placement leader. The Scheduler only advertises after the sidecar's own jobs stream has registered, so set the value higher than your application [health probe]({{% ref "app-health.md" %}}) budget.
+
+When the timeout expires and no Scheduler is reachable at all, the sidecar uses the Placement service. If a Scheduler is reachable but has not advertised a leader yet, the sidecar logs `Scheduler reachable but no placement leader advertised after <timeout>, still waiting` and keeps waiting. See the [arguments and annotations reference]({{% ref arguments-annotations-overview %}}).
+
 ## Placement tables
 
 There is an [HTTP API `/placement/state` for Placement service]({{% ref placement_api %}}) that exposes placement table information. The API is exposed on the sidecar on the same port as the healthz. This is an unauthenticated endpoint, and is disabled by default. You need to set `DAPR_PLACEMENT_METADATA_ENABLED` environment or `metadata-enabled` command line args to true to enable it. If you are using helm you just need to set `dapr_placement.metadataEnabled` to true.
