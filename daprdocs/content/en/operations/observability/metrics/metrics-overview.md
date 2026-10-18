@@ -12,6 +12,17 @@ By default, each Dapr system process emits Go runtime/process metrics and has th
 
 The Dapr sidecar exposes a [Prometheus](https://prometheus.io/)-compatible metrics endpoint that you can scrape to gain a greater understanding of how Dapr is behaving.
 
+Starting with Dapr v1.19, the metrics endpoint answers only `GET` and `HEAD` requests. Any other method, such as `POST`, returns `405 Method Not Allowed` with the header `Allow: GET, HEAD`. Prometheus scrapes use `GET`, so no change is needed for a standard scrape configuration. Update any tool or health probe that calls the metrics port with another method.
+
+```bash
+curl -i -X POST http://localhost:9090/
+```
+
+```
+HTTP/1.1 405 Method Not Allowed
+Allow: GET, HEAD
+```
+
 ## Configuring metrics using the CLI
 
 The metrics application endpoint is enabled by default. You can disable it by passing the command line argument `--enable-metrics=false`.
