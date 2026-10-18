@@ -57,6 +57,10 @@ With the Dapr Sentry service, all calls between Dapr applications can be made se
 
 For more information read the [service-to-service security]({{% ref "security-concept#sidecar-to-sidecar-communication" %}}) article.
 
+Starting with Dapr v1.19 (and v1.18.6), the sidecar of the called app sets the `dapr-caller-app-id` and `dapr-caller-namespace` headers itself, from the mTLS identity of the caller. Values that the calling app sends for these headers are removed. See [Headers in service invocation requests]({{% ref "service_invocation_api#headers-in-service-invocation-requests" %}}).
+
+Dapr also rejects methods that contain `%2F`, `%5C`, `%2E` (in any letter case) or a literal `\` before the access control check. See [Method names that are rejected]({{% ref "service_invocation_api#method-names-that-are-rejected" %}}).
+
 ### Resiliency including retries
 
 In the event of call failures and transient errors, service invocation provides a resiliency feature that performs automatic retries with backoff time periods. To find out more, see the [Resiliency article here]({{% ref resiliency-overview %}}).

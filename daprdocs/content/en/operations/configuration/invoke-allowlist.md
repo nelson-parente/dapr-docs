@@ -34,6 +34,8 @@ The SPIFFE ID is of the format: `**spiffe://\<trustdomain>/ns/\<namespace\>/\<ap
 
 For matching policies, the trust domain, namespace, and app ID values of the calling app are extracted from the SPIFFE ID in the TLS cert of the calling app. These values are matched against the trust domain, namespace, and app ID values specified in the policy spec. If all three of these match, then more specific policies are further matched.
 
+The `dapr-caller-app-id` and `dapr-caller-namespace` headers that the called app receives are set from the same identity. Starting with Dapr v1.19 (and v1.18.6), the called app's sidecar removes values for these headers that the calling app sent, so the called app can rely on them when mTLS is enabled. See [Headers in service invocation requests]({{% ref "service_invocation_api#headers-in-service-invocation-requests" %}}).
+
 ## Configuration properties
 
 The following tables lists the different properties for access control, policies, and operations:
@@ -63,6 +65,10 @@ The following tables lists the different properties for access control, policies
 | `name`     | string | Path name of the operations allowed on the called app. Wildcard "\*" can be used in a path to match. Wildcard "\**" can be used to match under multiple paths. |
 | `httpVerb` | list   | List specific http verbs that can be used by the calling app. Wildcard "\*" can be used to match any http verb. Unused for grpc invocation. |
 | `action`   | string | Access modifier. Accepted values "allow" (default) or "deny" |
+
+### Operation names that are rejected
+
+Starting with Dapr v1.19 (and v1.18.6), Dapr rejects a method that contains `%2F`, `%5C` or `%2E` (in any letter case) or a literal `\` before the access control check. A policy therefore never has to match an encoded path separator or dot. See [Method names that are rejected]({{% ref "service_invocation_api#method-names-that-are-rejected" %}}).
 
 ## Policy rules
 

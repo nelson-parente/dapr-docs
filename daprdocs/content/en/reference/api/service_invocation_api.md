@@ -45,6 +45,19 @@ XXX  | Upstream status returned
 403  | Invocation forbidden by access control
 500  | Request failed
 
+### Method names that are rejected
+
+Starting with Dapr v1.19 (and v1.18.6), Dapr rejects a method name that contains any of the following. The request fails with an `invalid method` error before the [access control]({{% ref invoke-allowlist.md %}}) check, and it never reaches the called app:
+
+- `%2F`, `%5C` or `%2E` in any letter case (percent-encoded `/`, `\` and `.`).
+- A literal `\` character.
+
+The check applies to service invocation over the HTTP and gRPC APIs, calls received from other sidecars, proxied gRPC calls, and actor method invocation. Dapr already rejected `#`, `?`, null bytes and control characters.
+
+The HTTP API decodes the URL once before the check. A method that is double-encoded by the caller, such as `a%252Fb`, or a backslash that is single-encoded, such as `a%5Cb`, is rejected. A single-encoded `%2F` or `%2E` sent to the invoke API is decoded to `/` or `.` first, and still works. Other percent-encoded characters, such as `%20`, are accepted and passed on unchanged.
+
+For [actor method invocation]({{% ref "actors_api#invoke-actor-method" %}}), the HTTP API does not decode the method, so a single-encoded `%2F`, `%5C` or `%2E` is rejected with HTTP `400`, and the gRPC API returns `InvalidArgument`.
+
 ### URL Parameters
 
 Parameter | Description
@@ -145,6 +158,14 @@ When Dapr invokes a service, it automatically adds the following headers to the 
 | `dapr-callee-app-id` | The ID of the called application | `mathService` |
 
 These headers are available in both HTTP and gRPC service invocation requests.
+
+The called app can rely on these headers only because its own sidecar sets them. Starting with Dapr v1.19 (and v1.18.6), the sidecar of the called app removes any `dapr-caller-app-id`, `dapr-caller-namespace` and `dapr-callee-app-id` values that the calling app sent, in any header casing, and sets the headers itself:
+
+- When [mTLS]({{% ref mtls.md %}}) is enabled, `dapr-caller-app-id` and `dapr-caller-namespace` come from the identity (SPIFFE ID) in the certificate of the calling sidecar. `dapr-callee-app-id` is the app ID of the called app.
+- When mTLS is disabled, there is no verified identity. The sidecar keeps the single value that the calling sidecar set and drops all others.
+- On gRPC proxy calls, the calling sidecar replaces the identity metadata instead of appending to it, and also sets `dapr-caller-namespace`. Before this change, `dapr-caller-namespace` was not set on proxied calls.
+
+Dapr's own [access control]({{% ref invoke-allowlist.md %}}) policies do not use these headers. They use the mTLS identity of the calling sidecar.
 
 #### Non-Dapr Endpoint Example
 
