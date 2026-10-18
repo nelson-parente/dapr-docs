@@ -681,6 +681,16 @@ curl -X POST "http://localhost:3500/v1.0/workflows/dapr/12345678/terminate?appID
 
 {{< /tabpane >}}
 
+## Start a workflow with the ID of a running workflow
+
+Only one workflow instance with a given ID can be running at a time. Starting with Dapr v1.19, when you schedule a workflow through a Dapr Workflow SDK client with the instance ID of a workflow that is still running, the runtime fails the call with the gRPC status `AlreadyExists` and the message `an active workflow with ID '<instance ID>' already exists`. Before, the runtime returned a plain error without this status. SDKs that map the status, such as the Java SDK with `WorkflowInstanceAlreadyExistsException`, raise their own already-exists error. Check for `AlreadyExists` if your code needs to tell this case apart from other scheduling failures.
+
+The HTTP API keeps its response for this case. See [Start workflow request]({{% ref "workflow_api.md#start-workflow-request" %}}) and [Implications of instance ID reuse]({{% ref "workflow-features-concepts.md#implications-of-instance-id-reuse" %}}).
+
+## Read the failure of a failed workflow
+
+When a workflow ends with the runtime status `FAILED`, the Get workflow API (HTTP and gRPC) reports the failure in the `dapr.workflow.failure.error_type` and `dapr.workflow.failure.error_message` properties. Starting with Dapr v1.19, the API no longer copies the failure message into `dapr.workflow.output` for a `FAILED` workflow, and the property is not set. Read the failure properties instead of the output. Any code that read the failure message from `dapr.workflow.output` must change. See [Get workflow request]({{% ref "workflow_api.md#get-workflow-request" %}}).
+
 ## Next steps
 
 Now that you've learned how to manage workflows, learn how to execute workflows across multiple applications

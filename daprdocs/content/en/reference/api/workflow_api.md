@@ -29,6 +29,8 @@ Note that workflow instance IDs can only contain alphanumeric characters, unders
 It is strongly recommended to give every execution a new instance ID rather than reusing an old one. See [Implications of instance ID reuse]({{% ref "workflow-features-concepts.md#implications-of-instance-id-reuse" %}}). An instance ID can only be reused once the existing workflow with that ID, and every child workflow it created (checked recursively), has reached a terminal state (`COMPLETED`, `FAILED`, or `TERMINATED`). Otherwise the request is rejected with a `409` conflict naming the workflow that is not yet terminal. To free up an instance ID unconditionally, first purge the workflow using the [purge API]({{% ref "workflow_api.md#purge-workflow-request" %}}). See [workflow identity]({{% ref "workflow-features-concepts.md#workflow-identity" %}}) for more details.
 {{% /alert %}}
 
+Starting with Dapr v1.19, a workflow SDK client that schedules a workflow with the ID of a running instance receives the gRPC status `AlreadyExists`. The response of this HTTP API for that case is unchanged.
+
 ### URL parameters
 
 Parameter | Description
@@ -263,7 +265,7 @@ Parameter | Description
 --------- | -----------
 `runtimeStatus` | The status of the workflow instance. Values include: `"RUNNING"`, `"COMPLETED"`, `"CONTINUED_AS_NEW"`, `"FAILED"`, `"CANCELED"`, `"TERMINATED"`, `"PENDING"`, `"SUSPENDED"`  
 
-The `properties` map does not include `dapr.workflow.output` when `runtimeStatus` is `"FAILED"`. A failed workflow has no successful output. Instead, the `properties` map carries the failure in these keys:
+Starting with Dapr v1.19, the `properties` map does not include `dapr.workflow.output` when `runtimeStatus` is `"FAILED"`. A failed workflow has no successful output. Before, the API copied the failure message into `dapr.workflow.output`, so the message appeared twice and a failed workflow looked like it had a successful output. Read the failure from the `dapr.workflow.failure.*` keys instead:
 
 Parameter | Description
 --------- | -----------
