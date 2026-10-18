@@ -244,6 +244,19 @@ Baggage is useful for:
    - Don't include sensitive information in baggage
    - Remember that context and header baggage remain separate
 
+## Span names for actor reminder and timer requests
+
+The HTTP endpoints that register, get, list and unregister actor reminders and timers emit spans named `<operation>Actor<Reminder|Timer>/<actorType>`. For example, registering a reminder on an actor of type `OrderActor` produces the span `RegisterActorReminder/OrderActor`.
+
+| Operation | Reminder span name | Timer span name |
+| --------- | ------------------ | --------------- |
+| Register | `RegisterActorReminder/<actorType>` | `RegisterActorTimer/<actorType>` |
+| Get | `GetActorReminder/<actorType>` | `GetActorTimer/<actorType>` |
+| List | `ListActorReminders/<actorType>` | `ListActorTimers/<actorType>` |
+| Unregister | `UnregisterActorReminder/<actorType>` | `UnregisterActorTimer/<actorType>` |
+
+Starting with Dapr v1.19, the span name no longer contains the actor ID or the name of the reminder or timer. Before, the span name was the request path, which created a new span name for every actor instance and reminder or timer name. Update any dashboard, alert or sampling rule that matches the old span names.
+
 ## Related Links
 
 - [Observability concepts]({{% ref observability-concept.md %}})
