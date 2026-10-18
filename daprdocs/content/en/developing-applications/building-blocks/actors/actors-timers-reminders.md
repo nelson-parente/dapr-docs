@@ -147,6 +147,8 @@ You can remove the actor timer by calling
 DELETE http://localhost:3500/v1.0/actors/<actorType>/<actorId>/timers/<name>
 ```
 
+Starting with Dapr v1.19, creating and removing a timer follow the same ownership rule as retrieving and listing timers. A sidecar that does not own the actor rejects the request with `403` and `ERR_ACTOR_TIMER_NOT_OWNED` (gRPC `PermissionDenied`). When an actor moves to another host, the previous host deletes its in-memory timers for that actor.
+
 Refer [api spec]({{% ref "actors_api#invoke-timer" %}}) for more details.
 
 ## Actor reminders

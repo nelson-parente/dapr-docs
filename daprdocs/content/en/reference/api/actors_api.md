@@ -26,6 +26,7 @@ POST/GET/PUT/DELETE http://localhost:<daprPort>/v1.0/actors/<actorType>/<actorId
 Code | Description
 ---- | -----------
 200  | Request successful
+403  | The actor type is reserved by Dapr (`ERR_ACTOR_TYPE_RESERVED`)
 500  | Request failed
 XXX  | Status code from upstream call
 
@@ -39,6 +40,10 @@ Parameter | Description
 `method` | The name of the method to invoke.
 
 > Note, all URL parameters are case-sensitive.
+
+{{% alert title="Note" color="primary" %}}
+Actor types that start with `dapr.internal.` are reserved for the Dapr runtime, for example the actor types that run workflows. Starting with Dapr v1.19 (and v1.18.6), invoking a reserved actor type through this API fails with the `ERR_ACTOR_TYPE_RESERVED` error code: HTTP status `403`, or gRPC status `PermissionDenied` for `InvokeActor`. The actor state, reminder and timer APIs already rejected reserved actor types. An application can't call a reserved actor type through its own sidecar.
+{{% /alert %}}
 
 #### Examples
 
@@ -523,6 +528,9 @@ Code | Description
 204  | Request successful
 500  | Request failed
 400  | Actor not found or malformed request
+403  | Actor not owned by this sidecar (`ERR_ACTOR_TIMER_NOT_OWNED`)
+
+Timers live in memory on the sidecar that hosts the actor, so a timer request must be sent to that sidecar. Starting with Dapr v1.19, a sidecar that does not own the actor rejects the request with `403` and `ERR_ACTOR_TIMER_NOT_OWNED` (gRPC `PermissionDenied`). See [Get actor timer]({{% ref "#get-actor-timer" %}}) for details.
 
 #### URL Parameters
 
@@ -755,7 +763,10 @@ DELETE http://localhost:<daprPort>/v1.0/actors/<actorType>/<actorId>/timers/<nam
 Code | Description
 ---- | -----------
 204  | Request successful
+403  | Actor not owned by this sidecar (`ERR_ACTOR_TIMER_NOT_OWNED`)
 500  | Request failed
+
+Starting with Dapr v1.19, a sidecar that does not own the actor rejects the request with `403` and `ERR_ACTOR_TIMER_NOT_OWNED` (gRPC `PermissionDenied`). See [Get actor timer]({{% ref "#get-actor-timer" %}}) for details.
 
 #### URL Parameters
 
@@ -931,6 +942,7 @@ Parameter | Description
 Header | Description
 ------ | -----------
 `Dapr-Reentrancy-Id` | Sent when [reentrancy]({{% ref actor-reentrancy %}}) is enabled for the actor type. Pass it verbatim on any actor call your handler makes, so that call re-enters the current chain instead of waiting on the actor's lock.
+`Dapr-Actor-Activation-Id` | Sent on every callback. Starting with Dapr v1.19, the value is new each time Dapr activates the actor. See [Actor activation ID]({{% ref "#actor-activation-id" %}}).
 
 #### Examples
 
@@ -975,6 +987,7 @@ Parameter | Description
 Header | Description
 ------ | -----------
 `Dapr-Reentrancy-Id` | Sent when [reentrancy]({{% ref actor-reentrancy %}}) is enabled for the actor type. Pass it verbatim on any actor call your handler makes, so that call re-enters the current chain instead of waiting on the actor's lock.
+`Dapr-Actor-Activation-Id` | Sent on every callback. Starting with Dapr v1.19, the value is new each time Dapr activates the actor. See [Actor activation ID]({{% ref "#actor-activation-id" %}}).
 
 #### Examples
 
@@ -1019,6 +1032,7 @@ Parameter | Description
 Header | Description
 ------ | -----------
 `Dapr-Reentrancy-Id` | Sent when [reentrancy]({{% ref actor-reentrancy %}}) is enabled for the actor type. Pass it verbatim on any actor call your handler makes, so that call re-enters the current chain instead of waiting on the actor's lock.
+`Dapr-Actor-Activation-Id` | Sent on every callback. Starting with Dapr v1.19, the value is new each time Dapr activates the actor. See [Actor activation ID]({{% ref "#actor-activation-id" %}}).
 
 #### Examples
 
@@ -1028,6 +1042,20 @@ The following example calls the `checkRebels` timer method on the actor type `st
 curl -X POST http://localhost:3000/actors/stormtrooper/50/method/timer/checkRebels \
   -H "Content-Type: application/json"
 ```
+
+### Actor activation ID
+
+The sidecar keeps its table of active actors in memory. When a sidecar restarts while the app keeps running, it does not send a deactivate callback for the actors it activated before the restart. When the sidecar activates such an actor again, your app can still hold the object from the earlier activation, with cached state that is out of date.
+
+Starting with Dapr v1.19, the sidecar sends the `Dapr-Actor-Activation-Id` header on every [invoke actor method](#invoke-actor-method-1), [invoke reminder](#invoke-reminder) and [invoke timer](#invoke-timer) callback. The value is a new unique string each time the sidecar activates the actor, and stays the same for all callbacks of that activation. A value that your app sets on a call to Dapr is replaced.
+
+Your app should treat the ID as the identity of the actor object:
+
+- Keep the activation ID next to any actor object, or cached actor state, that your app holds.
+- When a callback arrives for an actor ID with a different activation ID than the one you stored, drop the cached object and create a new one. Read the state again from the state store instead of using the cache.
+- Keep handling the [deactivate actor](#deactivate-actor) callback as before. It tells the app that an actor was deactivated, because it went idle or was rebalanced.
+
+On the [SubscribeActorEventsAlpha1](#subscribeactoreventsalpha1-grpc) stream the ID is in the `metadata` map of the invoke, reminder and timer requests, under the key `Dapr-Actor-Activation-Id`.
 
 ### Health check
 
@@ -1157,7 +1185,7 @@ Messages sent **from daprd to the app**. The first message is `initial_response`
 | `actor_id` | `string` | Actor ID. |
 | `method` | `string` | Method name to invoke. |
 | `data` | `bytes` | Request payload. |
-| `metadata` | `map<string,string>` | Request-level headers including `content-type` and `Dapr-Reentrancy-Id` (when reentrancy is enabled). |
+| `metadata` | `map<string,string>` | Request-level headers including `content-type`, `Dapr-Reentrancy-Id` (when reentrancy is enabled) and, starting with Dapr v1.19, `Dapr-Actor-Activation-Id`. |
 
 #### SubscribeActorEventsResponseReminderRequestAlpha1
 
@@ -1170,6 +1198,7 @@ Messages sent **from daprd to the app**. The first message is `initial_response`
 | `due_time` | `string` | Reminder due time (time.ParseDuration format). |
 | `period` | `string` | Reminder period (time.ParseDuration format). |
 | `data` | `google.protobuf.Any` | Reminder data payload. |
+| `metadata` | `map<string,string>` | Request-level headers including `Dapr-Reentrancy-Id` (when reentrancy is enabled) and, starting with Dapr v1.19, `Dapr-Actor-Activation-Id`. |
 
 #### SubscribeActorEventsResponseTimerRequestAlpha1
 
@@ -1183,6 +1212,7 @@ Messages sent **from daprd to the app**. The first message is `initial_response`
 | `period` | `string` | Timer period. |
 | `callback` | `string` | Callback method name registered with the timer. |
 | `data` | `google.protobuf.Any` | Timer data payload. |
+| `metadata` | `map<string,string>` | Request-level headers including `Dapr-Reentrancy-Id` (when reentrancy is enabled) and, starting with Dapr v1.19, `Dapr-Actor-Activation-Id`. |
 
 #### SubscribeActorEventsResponseDeactivateRequestAlpha1
 

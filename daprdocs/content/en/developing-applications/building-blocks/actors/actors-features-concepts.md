@@ -24,6 +24,8 @@ This virtual actor lifetime abstraction carries some caveats as a result of the 
 
 An actor is automatically activated (causing an actor object to be constructed) the first time a message is sent to its actor ID. After some period of time, the actor object is garbage collected. In the future, using the actor ID again, causes a new actor object to be constructed. An actor's state outlives the object's lifetime as state is stored in configured state provider for Dapr runtime.
 
+Starting with Dapr v1.19, the sidecar sends a `Dapr-Actor-Activation-Id` header on every invoke, reminder and timer callback to the app. The value is new each time the sidecar activates the actor. If the sidecar restarts while the app keeps running, the app can still hold an actor object, with cached state, from an earlier activation. When the activation ID for an actor ID changes, drop the cached object and read the state again. See [Actor activation ID]({{% ref "actors_api#actor-activation-id" %}}) in the actors API reference.
+
 ## Distribution and failover
 
 To provide scalability and reliability, actors instances are distributed throughout the cluster and Dapr automatically migrates them from failed nodes to healthy ones as required.
